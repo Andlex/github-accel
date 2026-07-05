@@ -117,12 +117,12 @@ func handle(conn net.Conn) {
 	defer target.Close()
 	target.SetDeadline(time.Now().Add(timeout))
 
-	// Send peeked data
 	if _, err := target.Write(peek); err != nil {
 		return
 	}
 
-	// Bidirectional forward
+	fmt.Printf("[加速成功] %s -> %s\n", sni, ip.String())
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); pipe(conn, target) }()
@@ -133,12 +133,17 @@ func handle(conn net.Conn) {
 func main() {
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Listen error: %v (need root)\n", err)
+		fmt.Fprintf(os.Stderr, "[错误] 启动失败: %v (需要管理员权限)\n", err)
 		os.Exit(1)
 	}
 	defer ln.Close()
 
-	fmt.Printf("GitHub accelerator :%s (%d domains)\n", port, len(domains))
+	fmt.Println("========================================")
+	fmt.Println("  GitHub 加速器已启动")
+	fmt.Println("  监听端口: 443")
+	fmt.Printf("  加速域名: %d 个\n", len(domains))
+	fmt.Println("  按 Ctrl+C 停止")
+	fmt.Println("========================================")
 
 	for {
 		conn, err := ln.Accept()
