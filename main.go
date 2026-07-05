@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
@@ -22,6 +23,82 @@ var domains = map[string]bool{
 	"cloud.githubusercontent.com": true, "gist.github.com": true,
 	"github.io": true, "github.dev": true, "pages.github.com": true,
 	"githubapp.com": true, "www.github.io": true,
+}
+
+// Raw DNS query bypassing /etc/hosts
+func dnsQuery(domain string) (string, error) {
+	// Build DNS query
+	txid := []byte{0x01, 0x02}
+	flags := []byte{0x01, 0x00}
+	qdcount := []byte{0x00, 0x01}
+	header := append(txid, flags...)
+	header = append(header, qdcount...)
+	header = append(header, 0, 0, 0, 0, 0, 0) // ancount, nscount, arcount
+
+	// Encode domain
+	qname := []byte{}
+	for _, part := range splitDomain(domain) {
+		qname = append(qname, byte(len(part)))
+		qname = append(qname, []byte(part)...)
+	}
+	qname = append(qname, 0)
+
+	qtype := []byte{0x00, 0x01} // A
+	qclass := []byte{0x00, 0x01} // IN
+
+	query := append(header, qname...)
+	query = append(query, qtype...)
+	query = append(query, qclass...)
+
+	// Send UDP query to 8.8.8.8
+	conn, err := net.DialTimeout("udp", "8.8.8.8:53", 5*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := conn.Write(query); err != nil {
+		return "", err
+	}
+
+	resp := make([]byte, 512)
+	n, err := conn.Read(resp)
+	if err != nil {
+		return "", err
+	}
+	resp = resp[:n]
+
+	// Parse response: skip header (12) + question
+	pos := 12
+	for resp[pos] != 0 {
+		pos += int(resp[pos]) + 1
+	}
+	pos += 5 // null + qtype + qclass
+
+	// Parse answer
+	if pos+12 > len(resp) {
+		return "", fmt.Errorf("no answer")
+	}
+	rdlen := binary.BigEndian.Uint16(resp[pos+10 : pos+12])
+	if rdlen == 4 {
+		ip := net.IPv4(resp[pos+12], resp[pos+13], resp[pos+14], resp[pos+15])
+		return ip.String(), nil
+	}
+	return "", fmt.Errorf("no A record")
+}
+
+func splitDomain(domain string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(domain); i++ {
+		if domain[i] == '.' {
+			parts = append(parts, domain[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, domain[start:])
+	return parts
 }
 
 func extractSNI(data []byte) string {
@@ -94,23 +171,13 @@ func handle(conn net.Conn) {
 		return
 	}
 
-	ips, err := net.LookupIP(sni)
-	if err != nil || len(ips) == 0 {
+	// Raw DNS query bypassing hosts file
+	ipStr, err := dnsQuery(sni)
+	if err != nil || ipStr == "" {
 		return
 	}
 
-	var ip net.IP
-	for _, v := range ips {
-		if v4 := v.To4(); v4 != nil {
-			ip = v4
-			break
-		}
-	}
-	if ip == nil {
-		return
-	}
-
-	target, err := net.DialTimeout("tcp", ip.String()+":443", timeout)
+	target, err := net.DialTimeout("tcp", ipStr+":443", timeout)
 	if err != nil {
 		return
 	}
@@ -121,7 +188,7 @@ func handle(conn net.Conn) {
 		return
 	}
 
-	fmt.Printf("[加速成功] %s -> %s\n", sni, ip.String())
+	fmt.Printf("[加速成功] %s -> %s\n", sni, ipStr)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
