@@ -1,0 +1,4 @@
+github-accel
+github-accel-*
+*.exe
+go.sum

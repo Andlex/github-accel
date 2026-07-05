@@ -1,0 +1,14 @@
+[Unit]
+Description=GitHub Accelerator
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/mi/github-accel/github-accel
+Restart=always
+RestartSec=3
+MemoryMax=50M
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
